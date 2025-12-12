@@ -1,327 +1,289 @@
-# Secret Scanner and Autofix Script
+# Repository Management and Security Automation Suite
 
-A comprehensive bash script that combines **gitleaks** and **trufflehog** for secret detection with automatic git history cleaning using **git-filter-repo**.
+A comprehensive collection of bash scripts for automated repository management, security scanning, and batch operations across multiple Git repositories.
 
-## 🚀 Features
+## Features
 
-- **Dual Scanning**: Combines gitleaks and trufflehog for comprehensive secret detection
-- **Automatic Git History Cleaning**: Removes secrets from entire git history using git-filter-repo
-- **Dry-Run Mode**: Test the script without making actual changes
-- **Comprehensive Logging**: Detailed logs and summary reports
-- **Backup Creation**: Automatic backup before cleaning git history
-- **Multiple Secret Types**: Detects API keys, passwords, tokens, AWS credentials, and more
-- **Safe Operation**: Error handling and graceful failure management
+### 📝 Automated README Generation with AI
+- **AI-Powered README Enhancement**: Uses Aider with OpenRouter API to automatically improve and generate README files across multiple repositories
+- **Smart Context Analysis**: Intelligently analyzes repository structure and code to generate accurate documentation
+  - Prioritizes high-signal configuration files (package.json, tsconfig.json, etc.)
+  - Analyzes representative source files from src/, app/, pages/, server/, lib/ directories
+  - Handles multiple project types: JavaScript/TypeScript, Python, Go, Rust, Java, and more
+- **Batch Processing**: Process hundreds of repositories in parallel with configurable job limits
+- **State Management**: Checkpoint system allows resuming interrupted operations
+- **License Management**: Automatically adds Apache 2.0 licenses to repositories
+- **Intelligent Retry Logic**: Automatic retry of failed repositories with configurable attempts
 
-## 📋 Requirements
+### 🔒 Secret Detection and Remediation
+- **Multi-Tool Secret Scanning**: Combines gitleaks and trufflehog for comprehensive secret detection
+- **Git History Cleaning**: Removes secrets from entire git history using git-filter-repo
+- **Current Files Only Mode**: Option to clean only current tracked files without history rewriting
+- **Parallel Processing**: Scan multiple repositories simultaneously for efficiency
+- **Automated Replacement**: Intelligently replaces detected secrets with safe placeholders
 
-### Required Tools
+### 🚀 Batch Repository Operations
+- **Parallel Git Operations**: Commit and push changes across multiple repositories concurrently
+- **GitHub Integration**: Automatically creates repositories and manages remote configurations
+- **Smart Remote Handling**: Safely migrates existing remotes to prevent conflicts
+- **Flexible Authentication**: Supports both GitHub CLI and personal access tokens
 
-Install the following tools before running the script:
+### ⚙️ Dependency Management
+- **Cross-Platform Support**: Works on Linux, macOS, and supports multiple package managers
+- **Automated Tool Installation**: Installs gitleaks, trufflehog, jq, and git-filter-repo
+- **Dependency Verification**: Ensures all required tools are properly installed before execution
 
-1. **gitleaks** - Secret detection tool
+## Scripts Overview
+
+| Script | Purpose | Key Features |
+|--------|---------|--------------|
+| `batch-aider-readmes.sh` | AI-powered README generation and improvement | OpenRouter AI integration, parallel processing, state management, context analysis, retry logic, license auto-generation |
+| `secret-scanner-autofix.sh` | Secret detection and removal from repositories | Multi-tool scanning, git history cleaning, current files mode, automated replacement |
+| `parallel-secret-scanner.sh` | Batch secret scanning across multiple repositories | Parallel processing, summary reports, resume capability |
+| `batch-commit-and-push.sh` | Batch commit and push operations to GitHub | Repository creation, remote management, parallel operations |
+| `install-dependencies.sh` | Install all required dependencies | Cross-platform support, dependency verification |
+
+## Installation
+
+### Quick Setup
+
+1. **Clone or download this repository:**
    ```bash
-   # macOS
-   brew install gitleaks
-   
-   # Linux
-   wget https://github.com/zricethezav/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz
-   tar -xzf gitleaks_8.18.0_linux_x64.tar.gz
-   sudo mv gitleaks /usr/local/bin/
-   
-   # Docker
-   docker pull zricethezav/gitleaks
+   git clone <repository-url>
+   cd opensource-transfer
    ```
 
-2. **trufflehog** - Advanced secret scanning tool
+2. **Install dependencies:**
    ```bash
-   # macOS
-   brew install trufflehog
-   
-   # Linux
-   curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
-   
-   # Docker
-   docker pull trufflesecurity/trufflehog:latest
+   chmod +x install-dependencies.sh
+   ./install-dependencies.sh
    ```
 
-3. **git-filter-repo** - Git history rewriting tool
-   ```bash
-   # Using pip (recommended)
-   pip install git-filter-repo
-   
-   # Using package manager
-   brew install git-filter-repo
-   
-   # Manual installation
-   # Download from: https://github.com/newren/git-filter-repo
-   ```
+3. **Configure required API keys:**
+   - **OpenRouter API Key** (for AI-powered README generation)
+   - **GitHub Token** (for repository operations)
 
-4. **jq** - JSON processor (for parsing scan results)
-   ```bash
-   # macOS
-   brew install jq
-   
-   # Ubuntu/Debian
-   sudo apt install jq
-   
-   # CentOS/RHEL
-   sudo yum install jq
-   ```
+### Prerequisites
 
-## 🔧 Installation
+- **Git**: For repository operations
+- **Python 3**: Required by git-filter-repo
+- **jq**: JSON processor for script functionality
+- **Aider**: AI coding assistant for README generation
+- **OpenRouter API Access**: For AI-powered README generation
+- **GitHub CLI** (optional): Enhanced GitHub integration
 
-1. Download the script:
-   ```bash
-   wget https://raw.githubusercontent.com/your-repo/secret-scanner-autofix.sh
-   chmod +x secret-scanner-autofix.sh
-   ```
+## Usage Examples
 
-2. Or clone this repository:
-   ```bash
-   git clone https://github.com/your-repo/secret-scanner-autofix.git
-   cd secret-scanner-autofix
-   chmod +x secret-scanner-autofix.sh
-   ```
+### AI-Powered README Generation (`batch-aider-readmes.sh`)
 
-## 📖 Usage
-
-### Basic Usage
+Generate and improve README files across all repositories in the `repo/` directory:
 
 ```bash
-./secret-scanner-autofix.sh <folder_path>
+./batch-aider-readmes.sh --api-key YOUR_OPENROUTER_KEY --jobs 4
 ```
 
-### Dry-Run Mode (Recommended for First Use)
+**Advanced Usage:**
+```bash
+# Process specific directory with custom model and settings
+./batch-aider-readmes.sh \
+  --api-key YOUR_OPENROUTER_KEY \
+  --model mistralai/devstral-2512:free \
+  --repo ./custom-repo-path \
+  --jobs 8 \
+  --timeout 600 \
+  --retry 2
+
+# Force re-run even if previously successful
+./batch-aider-readmes.sh \
+  --api-key YOUR_OPENROUTER_KEY \
+  --force
+
+# Dry run to see what would be processed
+./batch-aider-readmes.sh \
+  --api-key YOUR_OPENROUTER_KEY \
+  --dry-run
+```
+
+**Key Features of README Generation:**
+- **Smart Context Collection**: Analyzes project structure and prioritizes important files
+- **State Management**: Uses checkpoints to track progress and enable resumability
+- **Apache 2.0 License**: Automatically adds license files to repositories
+- **Git Integration**: Updates .gitignore and .git/description files
+- **Comprehensive Logging**: Detailed logs with performance metrics
+- **Error Recovery**: Automatic retry logic for failed repositories
+
+### Secret Scanning and Remediation
+
+Scan a single repository for secrets:
 
 ```bash
-./secret-scanner-autofix.sh <folder_path> --dry-run
+./secret-scanner-autofix.sh /path/to/repository
 ```
 
-### Examples
+**Scanning Modes:**
+```bash
+# Dry run - simulation only
+./secret-scanner-autofix.sh /path/to/repo --dry-run
+
+# Scan current files only (no history rewriting)
+./secret-scanner-autofix.sh /path/to/repo --no-history
+
+# Full scan with history flattening
+./secret-scanner-autofix.sh /path/to/repo --flatten
+```
+
+### Batch Secret Scanning
+
+Scan all repositories in `repo/` directory in parallel:
 
 ```bash
-# Scan and clean current directory
-./secret-scanner-autofix.sh .
-
-# Scan a specific repository
-./secret-scanner-autofix.sh /path/to/my/repo
-
-# Test without making changes
-./secret-scanner-autofix.sh /path/to/my/repo --dry-run
-
-# Show help
-./secret-scanner-autofix.sh --help
+./parallel-secret-scanner.sh
 ```
 
-## 📊 What the Script Does
-
-### 1. **Dependency Check**
-Verifies all required tools are installed before proceeding.
-
-### 2. **Input Validation**
-- Checks if the path exists and is a git repository
-- Validates command-line arguments
-
-### 3. **Secret Detection**
-- **Gitleaks Scan**: Scans current files and git history for common secret patterns
-- **Trufflehog Scan**: Performs advanced secret detection with verification
-
-### 4. **Pattern Extraction**
-- Extracts detected secrets from scan results
-- Creates replacement patterns for automatic cleaning
-- Adds common patterns as fallback
-
-### 5. **Git History Cleaning**
-- Creates a backup of the repository
-- Uses git-filter-repo to remove secrets from all commits
-- Handles all branches and tags
-
-### 6. **Reporting**
-- Generates detailed log files
-- Creates summary reports with findings and actions taken
-- Provides next steps and recommendations
-
-## 📄 Output Files
-
-The script creates several output files:
-
-- `secret-scanner-YYYYMMDD-HHMMSS.log` - Detailed execution log
-- `scan-summary-YYYYMMDD-HHMMSS.txt` - Summary report
-- `gitleaks-report.json` - Gitleaks scan results
-- `trufflehog-report.json` - Trufflehog scan results
-- `replacements.txt` - Generated replacement patterns
-
-## 🔍 Detected Secret Types
-
-The script can detect various types of secrets including:
-
-- **API Keys**: Generic API keys, Stripe keys, SendGrid keys
-- **AWS Credentials**: Access keys and secret keys
-- **Database Passwords**: MySQL, PostgreSQL, MongoDB connections
-- **JWT Secrets**: JSON Web Token secrets
-- **Private Keys**: SSH keys, certificates
-- **Slack Tokens**: Slack bot tokens and webhooks
-- **GitHub Tokens**: Personal access tokens
-- **Google API Keys**: Various Google service keys
-- **Generic Passwords**: Hardcoded password assignments
-
-## ⚠️ Important Considerations
-
-### Backup Your Repository
-- The script automatically creates backups, but it's recommended to manually backup your repository first
-- Store backups in a secure location
-
-### Force Push Required
-After cleaning git history, you'll need to force push to update remote repositories:
+**Advanced Options:**
 ```bash
-git push --force origin --all
-git push --force origin --tags
+# Parallel scanning with custom settings
+./parallel-secret-scanner.sh \
+  --jobs 8 \
+  --dry-run \
+  --verbose \
+  --resume
+
+# Process specific repository
+./parallel-secret-scanner.sh --process-single /path/to/repo
 ```
 
-### Coordinate with Team
-- Git history rewriting affects all collaborators
-- Notify team members before running the script on shared repositories
-- Consider using the dry-run mode to preview changes
+### Batch Repository Operations
 
-### Credential Rotation
-- **Immediately rotate any exposed credentials** after running the script
-- This includes API keys, passwords, tokens, and certificates
-- Update configurations with new credentials
+Commit and push changes to GitHub:
 
-### False Positives
-- Review scan results for false positives
-- Some legitimate content might be flagged as secrets
-- Adjust patterns if needed
-
-## 🔧 Advanced Configuration
-
-### Custom Gitleaks Configuration
-Create a `.gitleaks.toml` file in your repository root to customize detection rules:
-
-```toml
-title = "Gitleaks config"
-
-[[rules]]
-id = "custom-api-key"
-description = "Custom API key pattern"
-regex = '''custom-api-key-[a-zA-Z0-9]{32}'''
+```bash
+./batch-commit-and-push.sh \
+  --repo-dir ./repo \
+  --org your-org \
+  --token YOUR_GITHUB_TOKEN \
+  --jobs 4
 ```
 
-### Custom Trufflehog Configuration
-Trufflehog can be configured with custom detectors and patterns.
+**Repository Creation:**
+```bash
+# Create repositories if they don't exist
+./batch-commit-and-push.sh \
+  --org your-org \
+  --visibility public \
+  --desc-mode auto
+```
 
-## 🐛 Troubleshooting
+## Configuration
+
+### Environment Variables
+
+- `DRY_RUN`: Set to `true` for simulation mode (no actual changes)
+- `VERBOSE`: Enable detailed logging
+- `FORCE`: Override safety checks and force execution
+
+### API Keys and Authentication
+
+1. **OpenRouter API Key**: 
+   - Get from [OpenRouter](https://openrouter.ai/)
+   - Required for AI-powered README generation
+   - Default model: `mistralai/devstral-2512:free`
+
+2. **GitHub Token**:
+   - Create a Personal Access Token with repo permissions
+   - Used for repository creation and batch operations
+
+3. **Git Configuration**:
+   ```bash
+   git config --global user.name "Your Name"
+   git config --global user.email "your.email@example.com"
+   ```
+
+## Advanced Features
+
+### README Generation Intelligence
+
+The `batch-aider-readmes.sh` script includes sophisticated features:
+
+- **Context File Prioritization**: 
+  - Configuration files: package.json, tsconfig.json, vite.config.ts, etc.
+  - Build tools: webpack, rollup, svelte, nuxt, astro configs
+  - Code quality: eslint, prettier, babel configs
+  - Deployment: Dockerfile, docker-compose, vercel.json, etc.
+  - Language-specific: pyproject.toml, Cargo.toml, go.mod, pom.xml
+
+- **Source Code Analysis**:
+  - TypeScript/JavaScript files from src/, app/, pages/, server/, lib/
+  - Representative files to understand project structure
+  - Fallback mechanisms for edge cases
+
+- **State Management**:
+  - Checkpoint system prevents reprocessing successful repositories
+  - Resume capability for interrupted operations
+  - Detailed progress tracking with timestamps
+
+### Safety and Reliability
+
+- **Dry Run Mode**: All scripts support `--dry-run` for safe testing
+- **Backup Warnings**: Git history rewriting operations include safety warnings
+- **Dependency Validation**: Scripts verify required tools before execution
+- **Error Handling**: Comprehensive error handling with detailed logging
+- **Checkpoint System**: Resume interrupted batch operations
+- **File System Synchronization**: Ensures proper write completion
+
+## Directory Structure
+
+```
+├── batch-aider-readmes.sh          # AI README generation with context analysis
+├── batch-commit-and-push.sh        # Batch GitHub operations
+├── secret-scanner-autofix.sh       # Secret detection and removal
+├── parallel-secret-scanner.sh      # Parallel secret scanning
+├── install-dependencies.sh         # Dependency installation
+├── LICENSE                         # Apache 2.0 license
+└── README.md                       # This file
+```
+
+## Best Practices
+
+1. **Always run in dry-run mode first** to preview changes
+2. **Use appropriate timeout values** for large repositories (default: 300s)
+3. **Monitor parallel job limits** to avoid system overload
+4. **Enable retry logic** for production batch operations
+5. **Review AI-generated content** for accuracy and completeness
+6. **Backup important repositories** before running history rewriting operations
+
+## Troubleshooting
 
 ### Common Issues
 
-1. **"Not a git repository" error**
-   - Ensure the path points to a git repository
-   - Check if `.git` directory exists
+1. **Permission Errors**: Ensure scripts are executable (`chmod +x *.sh`)
+2. **Missing Dependencies**: Run `./install-dependencies.sh` to install requirements
+3. **API Authentication**: Verify OpenRouter and GitHub API keys are valid
+4. **Git Configuration**: Ensure user.name and user.email are set globally
+5. **Context File Issues**: Check repository structure for recognized file patterns
 
-2. **Missing dependencies**
-   - Install all required tools as listed in the Requirements section
-   - Verify tools are in your PATH
+### Logging and Debugging
 
-3. **Permission denied**
-   - Make the script executable: `chmod +x secret-scanner-autofix.sh`
-   - Ensure write permissions in the target directory
+All operations generate detailed logs:
+- **Main Logs**: Stored in script-specific directories with timestamps
+- **Repository Logs**: Individual logs for each processed repository
+- **State Files**: Checkpoint system with progress tracking
+- **Summary Reports**: Comprehensive reports with success/failure metrics
+- **Performance Metrics**: Duration tracking and resource usage
 
-4. **Git history not cleaning**
-   - Check if git-filter-repo is properly installed
-   - Ensure the repository is not protected by branch protection rules
+## Contributing
 
-5. **Large repositories**
-   - For large repositories, consider running in stages
-   - Monitor disk space for backup creation
+1. Test changes thoroughly with `--dry-run` mode
+2. Ensure compatibility across different operating systems
+3. Add appropriate error handling and logging
+4. Update documentation for new features
+5. Follow existing code patterns and conventions
 
-### Debug Mode
-The script includes debug logging. Check the log file for detailed execution information.
+## License
 
-## 📝 Example Workflow
-
-1. **Prepare**:
-   ```bash
-   # Create backup
-   cp -r my-repo my-repo-backup
-   
-   # Run dry-run to preview
-   ./secret-scanner-autofix.sh my-repo --dry-run
-   ```
-
-2. **Review Results**:
-   - Check summary report
-   - Review detected secrets for false positives
-   - Verify replacement patterns
-
-3. **Execute**:
-   ```bash
-   # Run actual cleaning
-   ./secret-scanner-autofix.sh my-repo
-   ```
-
-4. **Update Remote**:
-   ```bash
-   cd my-repo
-   git push --force origin --all
-   git push --force origin --tags
-   ```
-
-5. **Rotate Credentials**:
-   - Immediately update any exposed API keys
-   - Regenerate certificates if needed
-   - Update team members with new credentials
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## ⚡ Quick Start
-
-```bash
-# 1. Install dependencies
-brew install gitleaks jq
-curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh
-pip install git-filter-repo
-
-# 2. Make script executable
-chmod +x secret-scanner-autofix.sh
-
-# 3. Run dry-run test
-./secret-scanner-autofix.sh /path/to/repo --dry-run
-
-# 4. Review results and run actual cleanup
-./secret-scanner-autofix.sh /path/to/repo
-```
-
-## 🆘 Support
-
-If you encounter issues or need help:
-
-1. Check the troubleshooting section
-2. Review the log files for detailed error information
-3. Open an issue with:
-   - Your operating system
-   - Versions of installed tools
-   - Error messages from the log file
-   - Steps to reproduce the issue
-
-## 📚 Additional Resources
-
-- [Gitleaks Documentation](https://github.com/zricethezav/gitleaks)
-- [Trufflehog Documentation](https://github.com/trufflesecurity/trufflehog)
-- [Git-filter-repo Documentation](https://github.com/newren/git-filter-repo)
-- [GitHub: Removing sensitive data](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-**⚠️ Remember**: Always test in dry-run mode first and ensure you have proper backups before running the script on important repositories!
+**Author**: Samuel Koesnadi (samuel@kira.id)
+**Version**: 1.0.0
