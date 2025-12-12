@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Defaults (overridable via args)
-REPO_DIR="repo_big"
+REPO_DIR="repo"
 ORG="kira-id"
 VISIBILITY="public"                # public | private | internal
 COMMIT_MSG="chore: batch commit"
@@ -52,6 +52,11 @@ Default safe remote handling:
 Auth:
   Preferred: gh auth login && gh auth setup-git
   Or: ./$(basename "$0") --token YOUR_TOKEN
+
+OAuth Token Limitations:
+  - Tokens without 'workflow' scope cannot push GitHub Actions workflow files
+  - The script will automatically retry pushes excluding workflow files when this occurs
+  - For workflow files, use SSH authentication or tokens with full 'workflow' scope
 
 Performance:
   Use -j N to process N repositories in parallel (where N is typically 2-8)
@@ -368,6 +373,12 @@ process_repo() {
       log "  Remote '$REMOTE_NAME' already correct"
     fi
 
+    # Check for workflow files (for logging purposes only)
+    workflow_files=$(git ls-files '.github/workflows/' 2>/dev/null || true)
+    if [[ -n "$workflow_files" && -n "$TOKEN" ]]; then
+      log "  Detected workflow files (will auto-exclude if token lacks workflow scope)"
+    fi
+    
     if $DRY_RUN; then
       log "  [dry-run] git add -A"
     else
@@ -406,7 +417,76 @@ process_repo() {
       export GITHUB_TOKEN="$TOKEN"
       askpass="$(make_askpass)"
       trap 'rm -f "$askpass"' EXIT
-      GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push "${push_args[@]}"
+      # Try push, handle workflow scope errors gracefully
+      if ! GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push "${push_args[@]}" 2>&1 | tee /tmp/git_push_output_$$; then
+        if grep -q "workflow.*scope" /tmp/git_push_output_$$ 2>/dev/null; then
+          log "  Warning: Push failed due to workflow scope limitation. Retrying without workflow files..."
+          rm -f /tmp/git_push_output_$$
+          
+          # Reset the commit to re-stage without workflow files
+          if ! git diff --cached --quiet; then
+            log "  Resetting commit to exclude workflow files..."
+            git reset --soft HEAD~1
+          else
+            log "  No changes to reset (this shouldn't happen)"
+            rm -f "$askpass"
+            trap - EXIT
+            return 1
+          fi
+          
+          # Check if we actually have workflow files
+          workflow_files_check=$(git ls-files '.github/workflows/' 2>/dev/null || true)
+          if [[ -z "$workflow_files_check" ]]; then
+            log "  No workflow files found, this shouldn't happen"
+            rm -f "$askpass"
+            trap - EXIT
+            return 1
+          fi
+          
+          # Add all files except workflow files
+          log "  Adding files excluding .github/workflows/"
+          git add -A ':!.github/workflows/*' 2>/dev/null || {
+            log "  Could not exclude workflows, trying alternative method..."
+            git reset >/dev/null 2>&1 || true
+            git add -A 2>/dev/null || {
+              rm -f "$askpass"
+              trap - EXIT
+              return 1
+            }
+          }
+          
+          # Re-commit without workflow files
+          if ! git diff --cached --quiet; then
+            log "  Committing changes without workflow files..."
+            git commit -m "$COMMIT_MSG (excluding workflow files due to OAuth scope)"
+          else
+            log "  No changes after excluding workflows"
+            rm -f "$askpass"
+            trap - EXIT
+            return 1
+          fi
+          
+          # Retry push without workflow files
+          log "  Retrying push without workflow files..."
+          if ! GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push "${push_args[@]}"; then
+            log "  Push still failed even without workflow files"
+            rm -f "$askpass"
+            trap - EXIT
+            return 1
+          fi
+          
+          log "  Successfully pushed without workflow files"
+          rm -f "$askpass"
+          trap - EXIT
+          return 0
+        else
+          rm -f /tmp/git_push_output_$$
+          rm -f "$askpass"
+          trap - EXIT
+          exit 1  # Re-throw other errors
+        fi
+      fi
+      rm -f /tmp/git_push_output_$$
       rm -f "$askpass"
       trap - EXIT
     else
@@ -420,6 +500,19 @@ process_repo() {
     return 1
   }
 }
+
+# Export all functions needed by process_repo so they're available to subshells spawned by xargs
+export -f process_repo
+export -f log
+export -f have_cmd
+export -f make_askpass
+export -f unique_remote_name
+export -f sanitize_desc
+export -f infer_description_auto
+export -f render_description
+export -f ensure_github_repo_exists
+export -f get_current_description_api
+export -f maybe_set_description
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -482,9 +575,6 @@ processed=0
 if [[ $PARALLEL_JOBS -gt 1 ]]; then
   log "Running with $PARALLEL_JOBS parallel jobs"
   
-  # Create a temporary file for results
-  results_file="$(mktemp)"
-  
   # Export variables needed by process_repo function
   export ORG VISIBILITY TOKEN DESC_MODE DESC_TEMPLATE DESC_FIXED FORCE_DESCRIPTION DRY_RUN FORCE REMOTE_NAME OLD_REMOTE_BASE CREATE_REPOS COMMIT_MSG
   
@@ -513,10 +603,13 @@ if [[ $PARALLEL_JOBS -gt 1 ]]; then
     log "Falling back to sequential processing."
     PARALLEL_JOBS=1
   fi
-fi
-
-# Sequential processing (also used as fallback)
-if [[ $PARALLEL_JOBS -eq 1 ]]; then
+  
+  # Note: In parallel mode, processed/failure counters are not tracked
+  # The parallel commands above run process_repo which handles its own logging
+  processed=$total_dirs  # Approximation - parallel processing attempted all repos
+  
+else
+  # Sequential processing (also used as fallback)
   log "Running sequentially"
   for dir in "${dirs[@]}"; do
     if process_repo "$dir"; then
