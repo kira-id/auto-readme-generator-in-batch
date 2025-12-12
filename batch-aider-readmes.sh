@@ -9,16 +9,21 @@ JOBS_DEFAULT="$(
   || echo 4
 )"
 
+TIMEOUT_DEFAULT=300
+RETRY_DEFAULT=0
+
 usage() {
   cat <<EOF
 Usage:
-  $(basename "$0") --api-key <OPENROUTER_KEY> [--model <MODEL_NAME>] [--repo <PATH>] [--jobs N] [--dry-run] [--force]
+  $(basename "$0") --api-key <OPENROUTER_KEY> [--model <MODEL_NAME>] [--repo <PATH>] [--jobs N] [--timeout N] [--retry N] [--dry-run] [--force]
 
 Options:
   --api-key   Required. OpenRouter API key.
   --model     Optional. Default: ${MODEL_DEFAULT}
   --repo      Optional. Default: ./repo (relative to current dir) or ./repo next to this script if found
   --jobs      Optional. Parallel workers. Default: ${JOBS_DEFAULT}
+  --timeout   Optional. Timeout per repository in seconds. Default: ${TIMEOUT_DEFAULT} (5 minutes)
+  --retry     Optional. Number of retry attempts for failed repos. Default: ${RETRY_DEFAULT} (no retries)
   --dry-run   Optional. Print actions only, do not modify files and do not update checkpoint.
   --force     Optional. Re-run aider even if checkpoint says aider_ok.
   -h, --help  Show help.
@@ -30,6 +35,8 @@ MODEL_IN="$MODEL_DEFAULT"
 DRY_RUN=0
 FORCE=0
 JOBS="$JOBS_DEFAULT"
+TIMEOUT="$TIMEOUT_DEFAULT"
+RETRY="$RETRY_DEFAULT"
 
 # Prefer a "repo" folder next to this script if present
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -44,6 +51,8 @@ while [[ $# -gt 0 ]]; do
     --model) MODEL_IN="${2:-}"; shift 2 ;;
     --repo) REPO_DIR="${2:-}"; shift 2 ;;
     --jobs) JOBS="${2:-}"; shift 2 ;;
+    --timeout) TIMEOUT="${2:-}"; shift 2 ;;
+    --retry) RETRY="${2:-}"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --force) FORCE=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -62,6 +71,18 @@ if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [[ "$JOBS" -lt 1 ]]; then
   JOBS="$JOBS_DEFAULT"
 fi
 
+# Validate timeout
+if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT" -lt 1 ]]; then
+  echo "Warning: invalid --timeout '$TIMEOUT', using default '$TIMEOUT_DEFAULT'." >&2
+  TIMEOUT="$TIMEOUT_DEFAULT"
+fi
+
+# Validate retry
+if ! [[ "$RETRY" =~ ^[0-9]+$ ]] || [[ "$RETRY" -lt 0 ]]; then
+  echo "Warning: invalid --retry '$RETRY', using default '$RETRY_DEFAULT'." >&2
+  RETRY="$RETRY_DEFAULT"
+fi
+
 # Resolve repo dir to absolute path (this fixes the double-cd issue)
 if [[ ! -d "$REPO_DIR" ]]; then
   echo "Error: repo dir not found: $REPO_DIR" >&2
@@ -74,6 +95,7 @@ command -v git >/dev/null 2>&1 || { echo "Error: git not found in PATH." >&2; ex
 command -v flock >/dev/null 2>&1 || { echo "Error: flock not found in PATH." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || { echo "Error: sha256sum not found in PATH." >&2; exit 1; }
 command -v mktemp >/dev/null 2>&1 || { echo "Error: mktemp not found in PATH." >&2; exit 1; }
+command -v timeout >/dev/null 2>&1 || { echo "Error: timeout not found in PATH." >&2; exit 1; }
 
 MODEL="$MODEL_IN"
 if [[ "$MODEL" != openrouter/* ]]; then
@@ -105,6 +127,24 @@ state_last_status() {
   flock -x "$LOCK_FILE" awk -F'\t' -v r="$folder" '$1==r{last=$2} END{print last}' "$STATE_FILE"
 }
 
+track_failed_repo() {
+  local folder="$1"
+  local failed_file="$STATE_DIR/failed_repos.tmp"
+  echo "$folder" >> "$failed_file"
+}
+
+get_failed_repos() {
+  local failed_file="$STATE_DIR/failed_repos.tmp"
+  if [[ -f "$failed_file" ]]; then
+    cat "$failed_file"
+  fi
+}
+
+clear_failed_repos() {
+  local failed_file="$STATE_DIR/failed_repos.tmp"
+  [[ -f "$failed_file" ]] && rm -f "$failed_file"
+}
+
 ensure_gitignore_has_aider() {
   [[ -f .gitignore ]] || : > .gitignore
   if ! grep -Eq '^[[:space:]]*\.aider\*[[:space:]]*$' .gitignore; then
@@ -120,9 +160,9 @@ write_apache_license() {
   cat > LICENSE <<'EOF'
 Copyright 2025 Samuel Koesnadi (samuel@kira.id)
 
-                                 Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
+                                  Apache License
+                            Version 2.0, January 2004
+                         http://www.apache.org/licenses/
 
    TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 
@@ -134,166 +174,8 @@ Copyright 2025 Samuel Koesnadi (samuel@kira.id)
       "Licensor" shall mean the copyright owner or entity authorized by
       the copyright owner that is granting the License.
 
-      "Legal Entity" shall mean the union of the acting entity and all
-      other entities that control, are controlled by, or are under common
-      control with that entity. For the purposes of this definition,
-      "control" means (i) the power, direct or indirect, to cause the
-      direction or management of such entity, whether by contract or
-      otherwise, or (ii) ownership of fifty percent (50%) or more of the
-      outstanding shares, or (iii) beneficial ownership of such entity.
-
       "You" (or "Your") shall mean an individual or Legal Entity
       exercising permissions granted by this License.
-
-      "Source" form shall mean the preferred form for making modifications,
-      including but not limited to software source code, documentation
-      source, and configuration files.
-
-      "Object" form shall mean any form resulting from mechanical
-      transformation or translation of a Source form, including but
-      not limited to compiled object code, generated documentation,
-      and conversions to other media types.
-
-      "Work" shall mean the work of authorship, whether in Source or
-      Object form, made available under the License, as indicated by a
-      copyright notice that is included in or attached to the work
-      (an example is provided in the Appendix below).
-
-      "Derivative Works" shall mean any work, whether in Source or Object
-      form, that is based on (or derived from) the Work and for which the
-      editorial revisions, annotations, elaborations, or other modifications
-      represent, as a whole, an original work of authorship. For the purposes
-      of this License, Derivative Works shall not include works that remain
-      separable from, or merely link (or bind by name) to the interfaces of,
-      the Work and Derivative Works thereof.
-
-      "Contribution" shall mean any work of authorship, including
-      the original version of the Work and any modifications or additions
-      to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
-      or by an individual or Legal Entity authorized to submit on behalf of
-      the copyright owner. For the purposes of this definition, "submitted"
-      means any form of electronic, verbal, or written communication sent
-      to the Licensor or its representatives, including but not limited to
-      communication on electronic mailing lists, source code control systems,
-      and issue tracking systems that are managed by, or on behalf of, the
-      Licensor for the purpose of discussing and improving the Work, but
-      excluding communication that is conspicuously marked or otherwise
-      designated in writing by the copyright owner as "Not a Contribution."
-
-      "Contributor" shall mean Licensor and any individual or Legal Entity
-      on behalf of whom a Contribution has been received by Licensor and
-      subsequently incorporated within the Work.
-
-   2. Grant of Copyright License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      copyright license to reproduce, prepare Derivative Works of,
-      publicly display, publicly perform, sublicense, and distribute the
-      Work and such Derivative Works in Source or Object form.
-
-   3. Grant of Patent License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      (except as stated in this section) patent license to make, have made,
-      use, offer to sell, sell, import, and otherwise transfer the Work,
-      where such license applies only to those patent claims licensable
-      by such Contributor that are necessarily infringed by their
-      Contribution(s) alone or by combination of their Contribution(s)
-      with the Work to which such Contribution(s) was submitted. If You
-      institute patent litigation against any entity (including a
-      cross-claim or counterclaim in a lawsuit) alleging that the Work
-      or a Contribution incorporated within the Work constitutes direct
-      or contributory patent infringement, then any patent licenses
-      granted to You under this License for that Work shall terminate
-      as of the date such litigation is filed.
-
-   4. Redistribution. You may reproduce and distribute copies of the
-      Work or Derivative Works thereof in any medium, with or without
-      modifications, and in Source or Object form, provided that You
-      meet the following conditions:
-
-      (a) You must give any other recipients of the Work or
-          Derivative Works a copy of this License; and
-
-      (b) You must cause any modified files to carry prominent notices
-          stating that You changed the files; and
-
-      (c) You must retain, in the Source form of any Derivative Works
-          that You distribute, all copyright, patent, trademark, and
-          attribution notices from the Source form of the Work,
-          excluding those notices that do not pertain to any part of
-          the Derivative Works; and
-
-      (d) If the Work includes a "NOTICE" text file as part of its
-          distribution, then any Derivative Works that You distribute must
-          include a readable copy of the attribution notices contained
-          within such NOTICE file, excluding those notices that do not
-          pertain to any part of the Derivative Works, in at least one
-          of the following places: within a NOTICE text file distributed
-          as part of the Derivative Works; within the Source form or
-          documentation, if provided along with the Derivative Works; or,
-          within a display generated by the Derivative Works, if and
-          wherever such third-party notices normally appear. The contents
-          of the NOTICE file are for informational purposes only and
-          do not modify the License. You may add Your own attribution
-          notices within Derivative Works that You distribute, alongside
-          or as an addendum to the NOTICE text from the Work, provided
-          that such additional attribution notices cannot be construed
-          as modifying the License.
-
-      You may add Your own copyright statement to Your modifications and
-      may provide additional or different license terms and conditions
-      for use, reproduction, or distribution of Your modifications, or
-      for any such Derivative Works as a whole, provided Your use,
-      reproduction, and distribution of the Work otherwise complies with
-      the conditions stated in this License.
-
-   5. Submission of Contributions. Unless You explicitly state otherwise,
-      any Contribution intentionally submitted for inclusion in the Work
-      by You to the Licensor shall be under the terms and conditions of
-      this License, without any additional terms or conditions.
-      Notwithstanding the above, nothing herein shall supersede or modify
-      the terms of any separate license agreement you may have executed
-      with Licensor regarding such Contributions.
-
-   6. Trademarks. This License does not grant permission to use the trade
-      names, trademarks, service marks, or product names of the Licensor,
-      except as required for reasonable and customary use in describing the
-      origin of the Work and reproducing the content of the NOTICE file.
-
-   7. Disclaimer of Warranty. Unless required by applicable law or
-      agreed to in writing, Licensor provides the Work (and each
-      Contributor provides its Contributions) on an "AS IS" BASIS,
-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-      implied, including, without limitation, any warranties or conditions
-      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-      PARTICULAR PURPOSE. You are solely responsible for determining the
-      appropriateness of using or redistributing the Work and assume any
-      risks associated with Your exercise of permissions under this License.
-
-   8. Limitation of Liability. In no event and under no legal theory,
-      whether in tort (including negligence), contract, or otherwise,
-      unless required by applicable law (such as deliberate and grossly
-      negligent acts) or agreed to in writing, shall any Contributor be
-      liable to You for damages, including any direct, indirect, special,
-      incidental, or consequential damages of any character arising as a
-      result of this License or out of the use or inability to use the
-      Work (including but not limited to damages for loss of goodwill,
-      work stoppage, computer failure or malfunction, or any and all
-      other commercial damages or losses), even if such Contributor
-      has been advised of the possibility of such damages.
-
-   9. Accepting Warranty or Additional Liability. While redistributing
-      the Work or Derivative Works thereof, You may choose to offer,
-      and charge a fee for, acceptance of support, warranty, indemnity,
-      or other liability obligations and/or rights consistent with this
-      License. However, in accepting such obligations, You may act only
-      on Your own behalf and on Your sole responsibility, not on behalf of
-      any other Contributor, and only if You agree to indemnify, defend,
-      and hold each Contributor harmless for any liability incurred by, or
-      claims asserted against, such Contributor by reason of your accepting
-      any such warranty or additional liability.
 
    END OF TERMS AND CONDITIONS
 EOF
@@ -327,7 +209,7 @@ build_message_file() {
   local msg_file="$2"
 
   {
-    printf '%s\n\n' "Rewrite README.md using a WHOLE-FILE replacement and update .git/description."
+    printf '%s\n\n' "Rewrite README.md using EDIT FORMAT DIFF and update .git/description."
     printf '%s\n' "Hard rules:"
     printf '%s\n' "- Edit README.md and .git/description."
     printf '%s\n' "- Keep claims strictly accurate to files in this folder. Do not invent features."
@@ -373,16 +255,20 @@ run_aider() {
       [[ -f "$f" ]] && readonly_args+=(--read "$f")
     done
 
-    aider \
+    timeout "$TIMEOUT" aider \
       --model "$MODEL" \
       --api-key "openrouter=$API_KEY" \
       --yes-always \
-      --edit-format whole \
+      --edit-format diff \
       --no-gitignore --no-add-gitignore-files \
       --no-browser --no-detect-urls \
       --no-show-model-warnings \
       --no-check-update --no-show-release-notes \
       --no-analytics --no-auto-commits \
+      --chat-history-file /dev/null \
+      --input-history-file /dev/null \
+      --llm-history-file /dev/null \
+      --no-restore-chat-history \
       --subtree-only \
       --message-file "$msg_file" \
       "${readonly_args[@]}" \
@@ -391,66 +277,159 @@ run_aider() {
 }
 
 extract_readme_from_log() {
-  # Extract the last fenced block that follows a README.md header line.
+  # Extract README content from aider logs that use diff format
+  # Pattern: "README.md" section followed by "<<<<<<< SEARCH" ... "=======" ... "▌ ▌ ▌ ▌ ▌ ▌ ▌ REPLACE"
   local log_file="$1"
   local out_file="$2"
+
+  # Input validation
+  if [[ -z "$log_file" || -z "$out_file" ]]; then
+    echo "Error: extract_readme_from_log requires log_file and out_file parameters" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$log_file" ]]; then
+    echo "Error: log file not found: $log_file" >&2
+    return 1
+  fi
+
+  # Clear/create output file
+  > "$out_file"
 
   awk '
     function strip_prefix(s) {
       sub(/^[[:space:]]*(ASSISTANT|USER)[[:space:]]+/, "", s)
       return s
     }
-    BEGIN { want=0; cap=0; buf=""; last=""; line_count=0 }
+    function is_metadata_line(s) {
+      # Check for various metadata/system message patterns
+      if (s ~ /^Applied edit to/) return 1
+      if (s ~ /^File.*created/) return 1
+      if (s ~ /^File.*deleted/) return 1
+      if (s ~ /^Traceback/) return 1
+      if (s ~ /^SyntaxError/) return 1
+      if (s ~ /^Error:/) return 1
+      if (s ~ /^Warning:/) return 1
+      # Handle both regular and markdown header forms
+      if (s ~ /^\s*#{1,6}\s*Tokens?:/) return 1
+      if (s ~ /^\s*Tokens?:/) return 1
+      if (s ~ /^\s*#{1,6}\s*Cost:/) return 1
+      if (s ~ /^\s*Cost:/) return 1
+      if (s ~ /^\s*#{1,6}\s*Model:/) return 1
+      if (s ~ /^\s*Model:/) return 1
+      if (s ~ /^\s*#{1,6}\s*Temperature:/) return 1
+      if (s ~ /^\s*Temperature:/) return 1
+      if (s ~ /^\s*#{1,6}\s*Max tokens:/) return 1
+      if (s ~ /^\s*Max tokens:/) return 1
+      if (s ~ /^\s*#{1,6}\s*Used tokens:/) return 1
+      if (s ~ /^\s*Used tokens:/) return 1
+      if (s ~ /^\s*#{1,6}\s*Remaining tokens:/) return 1
+      if (s ~ /^\s*Remaining tokens:/) return 1
+      if (s ~ /^\s*API response/) return 1
+      if (s ~ /^\s*HTTP status/) return 1
+      if (s ~ /^\s*curl /) return 1
+      if (s ~ /^\s*wget /) return 1
+      return 0
+    }
+    function is_command_line(s) {
+      # Check for command execution patterns
+      if (s ~ /^\s*(python3|python|node|npm|yarn|pip|poetry|go|cargo|make|docker|docker-compose)\s+\w+/) return 1
+      if (s ~ /^\s*# Command/) return 1
+      if (s ~ /^\s*# Running/) return 1
+      if (s ~ /^\s*# Installing/) return 1
+      if (s ~ /^\s*# Building/) return 1
+      return 0
+    }
+    BEGIN {
+      in_readme_section=0
+      in_diff_block=0
+      captured_content=""
+      line_count=0
+      saw_separator=0
+      errors=0
+    }
     {
       line=$0
       gsub(/\r$/, "", line)
       line2=strip_prefix(line)
 
-      if (cap==0) {
-        # Accept: "README.md", "README.md:", "README.md (something)"
-        # Be more strict: only match if followed by a fence within reasonable distance
-        if (line2 ~ /^README\.md([[:space:]]*[:(].*)?[[:space:]]*$/) {
-          want=1;
+      # Reset state if we hit a new file section
+      if (line2 ~ /^\.git\/description[[:space:]]*$/) {
+        in_readme_section=0
+        in_diff_block=0
+        saw_separator=0
+        content_buffer=""
+        line_count=0
+        next
+      }
+
+      # Track if we are in README.md section
+      if (line2 ~ /^README\.md[[:space:]]*$/) {
+        in_readme_section=1
+        next
+      }
+
+      # If in README section and see diff markers, start capturing
+      if (in_readme_section) {
+        if (line2 ~ /^<<<<<<< SEARCH/) {
+          in_diff_block=1
+          content_buffer=""
+          line_count=0
           next
         }
-        if (want==1 && line2 ~ /^```/) {
-          cap=1;
-          buf="";
-          line_count=0;
+        
+        # Found the separator, start capturing content after this
+        if (in_diff_block && line2 ~ /^=======[[:space:]]*$/) {
+          saw_separator=1
           next
         }
-        want=0
-        next
-      }
-
-      # cap==1 - capturing content
-      if (line2 ~ /^```[[:space:]]*$/) {
-        # Only accept if we captured a reasonable amount of content (at least 5 lines)
-        if (line_count >= 5) {
-          last=buf
+        
+        # End of diff block - handle both patterns
+        if (in_diff_block && (line2 ~ /^▌ ▌ ▌ ▌ ▌ ▌ ▌ REPLACE/ || line2 ~ /^>>>>>>> REPLACE/)) {
+          # Accept if we captured some reasonable content (at least 1 line after separator)
+          if (saw_separator && line_count > 0) {
+            captured_content=content_buffer
+          }
+          in_diff_block=0
+          in_readme_section=0
+          saw_separator=0
+          next
         }
-        cap=0
-        want=0
-        next
+        
+        # Capture content after separator
+        if (in_diff_block && saw_separator) {
+          # Only capture lines that are not metadata or commands
+          if (!is_metadata_line(line2) && !is_command_line(line2)) {
+            # Preserve all other content including markdown syntax (backticks, headers, etc.)
+            content_buffer = content_buffer line2 "\n"
+            line_count++
+          }
+        }
       }
-
-      # Skip lines that look like file operations or commands
-      if (line2 ~ /^(python3|npm|node|yarn|pip|go|cargo|make)\s+\w+/ ||
-          line2 ~ /^Applied edit to/ ||
-          line2 ~ /^File.*created/ ||
-          line2 ~ /^Traceback/ ||
-          line2 ~ /^SyntaxError/ ||
-          line2 ~ /^```/) {
-        next
-      }
-
-      buf = buf line2 "\n"
-      line_count++
     }
     END {
-      if (last != "") printf "%s", last
+      if (captured_content != "") {
+        printf "%s", captured_content
+      } else if (errors > 0) {
+        print "" > "/dev/stderr"
+      }
     }
-  ' "$log_file" > "$out_file"
+  ' "$log_file" > "$out_file" 2>/dev/null
+
+  # Check if extraction was successful
+  if [[ ! -s "$out_file" ]]; then
+    # Try alternative extraction method for edge cases
+    if grep -q "README\.md" "$log_file" 2>/dev/null; then
+      # Fallback: extract everything between ======= and the first REPLACE marker
+      awk '
+        /README\.md/ { in_readme=1 }
+        /\.git\/description/ { in_readme=0 }
+        in_readme && /^=======/ { capture=1; next }
+        capture && (/^▌ ▌ ▌ ▌ ▌ ▌ ▌ REPLACE/ || /^>>>>>>> REPLACE/) { exit }
+        capture { print }
+      ' "$log_file" > "$out_file" 2>/dev/null || true
+    fi
+  fi
 
   [[ -s "$out_file" ]]
 }
@@ -539,6 +518,12 @@ process_one_repo() {
         aider_rc=$?
         set -e
 
+        # FIXED: Ensure file system synchronization to prevent caching issues
+        echo "DEBUG: Syncing filesystem to ensure file writes are completed" >&2
+        sync README.md .git/description 2>/dev/null || true
+        sync . 2>/dev/null || true
+        sleep 0.1  # Small delay to ensure write completion
+
         after_hash="$(sha_file README.md)"
         echo "DEBUG: After aider - README.md hash: '$after_hash'" >&2
         echo "DEBUG: After aider - README.md size: $(wc -l < README.md 2>/dev/null || echo 'N/A') lines" >&2
@@ -554,6 +539,8 @@ process_one_repo() {
               echo "DEBUG: Applying extracted README content" >&2
               cat "$extracted_readme" > README.md
               forced_apply="yes"
+              # Sync again after applying extracted content
+              sync README.md 2>/dev/null || true
             else
               echo "DEBUG: No extracted content to apply" >&2
             fi
@@ -574,7 +561,10 @@ process_one_repo() {
       [[ $DRY_RUN -eq 1 ]] || state_append "$base" "aider_ok" "$utc_iso" "$dur" "$aider_rc" "$MODEL" "log=$log_file forced_apply=$forced_apply"
     else
       aider_status="fail"
-      [[ $DRY_RUN -eq 1 ]] || state_append "$base" "aider_fail" "$utc_iso" "$dur" "$aider_rc" "$MODEL" "log=$log_file forced_apply=$forced_apply"
+      [[ $DRY_RUN -eq 1 ]] || {
+        state_append "$base" "aider_fail" "$utc_iso" "$dur" "$aider_rc" "$MODEL" "log=$log_file forced_apply=$forced_apply"
+        track_failed_repo "$base"
+      }
       printf "%s\t%s\t%s\t%s\t%s\n" "$base" "$aider_status" "$aider_rc" "commit_skipped" "$dur" > "$result_file"
       echo "DONE   $base (aider_fail rc=$aider_rc, log=$log_file)"
       return 0
@@ -637,10 +627,10 @@ process_one_repo() {
 
 export -f process_one_repo \
   ensure_gitignore_has_aider write_apache_license write_git_description \
-  state_append state_last_status sha_file build_message_file run_aider \
-  extract_readme_from_log
+  state_append state_last_status track_failed_repo get_failed_repos clear_failed_repos \
+  sha_file build_message_file run_aider extract_readme_from_log
 
-export REPO_DIR MODEL API_KEY DRY_RUN FORCE LOCK_FILE STATE_FILE LOG_DIR RESULTS_DIR RUN_ID TMP_DIR
+export REPO_DIR MODEL API_KEY DRY_RUN FORCE TIMEOUT RETRY LOCK_FILE STATE_FILE LOG_DIR RESULTS_DIR RUN_ID TMP_DIR
 
 mapfile -d '' DIRS < <(
   find "$REPO_DIR" -mindepth 1 -maxdepth 1 -type d \
@@ -651,6 +641,8 @@ mapfile -d '' DIRS < <(
 echo "Run id: $RUN_ID"
 echo "Repo root: $REPO_DIR"
 echo "Jobs: $JOBS"
+echo "Timeout: ${TIMEOUT}s per repository"
+echo "Retry: ${RETRY} attempt(s) for failed repos"
 echo "Logs: $LOG_DIR"
 echo "Checkpoint: $STATE_FILE"
 echo "Queued: ${#DIRS[@]} folders"
@@ -658,10 +650,31 @@ echo
 
 printf '%s\0' "${DIRS[@]}" | xargs -0 -n1 -P "$JOBS" bash -c 'process_one_repo "$1"' _
 
+# Handle retries if any failed repositories and retries are enabled
+if [[ $RETRY -gt 0 ]]; then
+  local failed_repos
+  failed_repos=($(get_failed_repos))
+  
+  if [[ ${#failed_repos[@]} -gt 0 ]]; then
+    echo
+    echo "Retrying ${#failed_repos[@]} failed repository(ies)..."
+    echo "Failed repos: ${failed_repos[*]}"
+    echo
+    
+    # Process failed repositories for retry
+    printf '%s\0' "${failed_repos[@]}" | xargs -0 -n1 -P "$JOBS" bash -c 'process_one_repo "$1"' _
+    
+    # Clear the failed repos list after retry processing
+    clear_failed_repos
+  fi
+fi
+
 # Summary
 aider_ok=0
 aider_fail=0
 aider_skipped_ok=0
+retry_ok=0
+retry_fail=0
 commit_committed=0
 commit_no_changes=0
 commit_fail=0
@@ -682,6 +695,20 @@ while IFS=$'\t' read -r base aider_status aider_rc commit_status dur; do
   esac
 done < <(find "$RESULTS_DIR" -maxdepth 1 -type f -name '*.tsv' -print0 2>/dev/null | xargs -0 cat 2>/dev/null || true)
 
+# Count retry results separately if retries were performed
+if [[ $RETRY -gt 0 ]]; then
+  local retry_results_file="$RESULTS_DIR/retry_results.tsv"
+  if [[ -f "$retry_results_file" ]]; then
+    while IFS=$'\t' read -r base aider_status aider_rc commit_status dur; do
+      [[ -n "${base:-}" ]] || continue
+      case "$aider_status" in
+        ok) ((retry_ok+=1)) ;;
+        fail) ((retry_fail+=1)) ;;
+      esac
+    done < "$retry_results_file"
+  fi
+fi
+
 echo
 echo "==================== Summary ===================="
 echo "Queued folders:         ${#DIRS[@]}"
@@ -690,6 +717,14 @@ echo
 echo "Aider OK:               $aider_ok"
 echo "Aider FAIL:             $aider_fail"
 echo "Aider skipped (OK):     $aider_skipped_ok"
+
+if [[ $RETRY -gt 0 && (${retry_ok:-0} -gt 0 || ${retry_fail:-0} -gt 0) ]]; then
+  echo
+  echo "Retry Results:"
+  echo "Retry OK:               $retry_ok"
+  echo "Retry FAIL:             $retry_fail"
+fi
+
 echo
 echo "Commits made:           $commit_committed"
 echo "No changes to commit:   $commit_no_changes"
