@@ -204,14 +204,149 @@ sha_file() {
   fi
 }
 
+find_pruned() {
+  # Usage: find_pruned <find-args...>
+  # Prunes common large/irrelevant directories for context discovery.
+  find . \
+    \( \
+      -path './.git' -o -path './.git/*' -o \
+      -path './node_modules' -o -path './node_modules/*' -o \
+      -path './.next' -o -path './.next/*' -o \
+      -path './dist' -o -path './dist/*' -o \
+      -path './build' -o -path './build/*' -o \
+      -path './out' -o -path './out/*' -o \
+      -path './coverage' -o -path './coverage/*' -o \
+      -path './.turbo' -o -path './.turbo/*' -o \
+      -path './.cache' -o -path './.cache/*' -o \
+      -path './target' -o -path './target/*' -o \
+      -path './vendor' -o -path './vendor/*' -o \
+      -path './.venv' -o -path './.venv/*' -o \
+      -path './venv' -o -path './venv/*' -o \
+      -path './__pycache__' -o -path './__pycache__/*' \
+    \) -prune -o \
+    "$@"
+}
+
+collect_context_files() {
+  # Prints 1+ context files (relative paths), preferring high-signal configs and a few representative sources.
+  local max_files="${1:-8}"
+  local -a selected=()
+  declare -A seen=()
+
+  add_file() {
+    local f="$1"
+    [[ -n "$f" ]] || return 0
+    f="${f#./}"
+    [[ -n "$f" ]] || return 0
+    [[ -f "$f" ]] || return 0
+    if [[ -z "${seen["$f"]+x}" ]]; then
+      seen["$f"]=1
+      selected+=("$f")
+    fi
+  }
+
+  local f
+
+  # High-signal files (common across JS/Next/Node, plus general repo context).
+  local -a important_exact=(
+    package.json pnpm-workspace.yaml pnpm-lock.yaml yarn.lock package-lock.json npm-shrinkwrap.json
+    next.config.js next.config.mjs next.config.ts
+    tsconfig.json tsconfig.base.json jsconfig.json
+    vite.config.ts vite.config.js vite.config.mjs
+    webpack.config.js webpack.config.ts webpack.config.mjs
+    rollup.config.js rollup.config.ts rollup.config.mjs
+    svelte.config.js nuxt.config.js nuxt.config.ts astro.config.mjs remix.config.js
+    eslint.config.js eslint.config.mjs eslint.config.cjs .eslintrc .eslintrc.js .eslintrc.cjs .eslintrc.json
+    .prettierrc .prettierrc.json .prettierrc.yml .prettierrc.yaml .prettierrc.js prettier.config.js
+    babel.config.js .babelrc .babelrc.json
+    postcss.config.js tailwind.config.js tailwind.config.ts
+    vercel.json netlify.toml firebase.json
+    Dockerfile docker-compose.yml docker-compose.yaml compose.yml Makefile
+    pyproject.toml requirements.txt setup.py setup.cfg poetry.lock
+    Cargo.toml go.mod pom.xml build.gradle settings.gradle
+  )
+
+  for name in "${important_exact[@]}"; do
+    f="$(find_pruned -type f -name "$name" -print 2>/dev/null | LC_ALL=C sort | head -n 1 || true)"
+    [[ -n "$f" ]] && add_file "$f"
+    [[ "${#selected[@]}" -ge "$max_files" ]] && break
+  done
+
+  # Representative source files (helpful for accurate README claims), especially for JS/Next.
+  if [[ "${#selected[@]}" -lt "$max_files" ]]; then
+    while IFS= read -r f; do
+      add_file "$f"
+      [[ "${#selected[@]}" -ge "$max_files" ]] && break
+    done < <(
+      find_pruned -type f \
+        \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.mjs' -o -name '*.cjs' \) \
+        -print 2>/dev/null \
+        | grep -E '^\./(src|app|pages|server|lib|packages|apps)/' \
+        | LC_ALL=C sort \
+        | head -n 4
+    )
+  fi
+
+  # Add a couple of "random but plausible" extra files for weird repos / uncommon layouts.
+  # Ensure we always include at least 1 context file, ideally >=3.
+  local want_random=2
+  if [[ "${#selected[@]}" -lt 3 ]]; then
+    want_random="$((3 - ${#selected[@]}))"
+  fi
+  if [[ "$want_random" -gt 0 && "${#selected[@]}" -lt "$max_files" ]]; then
+    local -a candidates=()
+    mapfile -t candidates < <(
+      find_pruned -type f -size -200k \
+        ! -name '*.png' ! -name '*.jpg' ! -name '*.jpeg' ! -name '*.gif' ! -name '*.webp' ! -name '*.svg' \
+        ! -name '*.pdf' ! -name '*.zip' ! -name '*.tar' ! -name '*.gz' ! -name '*.7z' ! -name '*.jar' \
+        ! -name '*.bin' ! -name '*.exe' ! -name '*.dll' ! -name '*.so' ! -name '*.dylib' \
+        -print 2>/dev/null \
+        | sed 's|^\./||' \
+        | LC_ALL=C sort
+    )
+
+    if [[ "${#candidates[@]}" -gt 0 ]]; then
+      if command -v shuf >/dev/null 2>&1; then
+        while IFS= read -r f; do
+          add_file "$f"
+          [[ "${#selected[@]}" -ge "$max_files" ]] && break
+        done < <(printf '%s\n' "${candidates[@]}" | shuf -n "$want_random" 2>/dev/null || true)
+      else
+        local i=0
+        while [[ $i -lt "$want_random" && $i -lt "${#candidates[@]}" ]]; do
+          add_file "${candidates[$i]}"
+          i=$((i + 1))
+        done
+      fi
+    fi
+  fi
+
+  # Absolute fallback: pick any file (even README) so we always provide at least one --read.
+  if [[ "${#selected[@]}" -eq 0 ]]; then
+    f="$(find_pruned -type f -print 2>/dev/null | head -n 1 || true)"
+    [[ -n "$f" ]] && add_file "$f"
+  fi
+
+  printf '%s\n' "${selected[@]}"
+}
+
 build_message_file() {
   local repo_name="$1"
   local msg_file="$2"
 
   {
-    printf '%s\n\n' "Rewrite README.md using EDIT FORMAT DIFF and update .git/description."
+    if [[ -f .git/description ]]; then
+      printf '%s\n\n' "Rewrite README.md using EDIT FORMAT DIFF and update .git/description."
+    else
+      printf '%s\n\n' "Rewrite README.md using EDIT FORMAT DIFF."
+    fi
     printf '%s\n' "Hard rules:"
-    printf '%s\n' "- Edit README.md and .git/description."
+    printf '%s\n' "- Edit README.md."
+    if [[ -f .git/description ]]; then
+      printf '%s\n' "- Edit .git/description."
+    else
+      printf '%s\n' "- Do not create a new .git directory."
+    fi
     printf '%s\n' "- Keep claims strictly accurate to files in this folder. Do not invent features."
     printf '%s\n' "- Produce a useful end-user README with these sections: why this repo, background on what situation this solution fits, use cases, quick start, detailed installation and usage, development progress, what this repository not yet solved, contributing."
     printf '%s\n' "- Include a License section: Apache-2.0 and a LICENSE file exists."
@@ -221,7 +356,9 @@ build_message_file() {
     printf '%s\n' "- Repository content must be engaging, clear, and descriptive."
     printf '%s\n' "- The first line should be a descriptive title (not '# repo-folder-name'). Create a compelling, descriptive title that reflects the repository'\''s purpose."
     printf '%s\n' "- Do NOT start with an 'Overview' heading - go straight to content."
-    printf '%s\n' "- Write a concise, descriptive summary for .git/description that captures the essence of this repository."
+    if [[ -f .git/description ]]; then
+      printf '%s\n' "- Write a concise, descriptive summary for .git/description that captures the essence of this repository."
+    fi
     printf 'Repository: %s\n\n' "$repo_name"
     printf '%s\n' "Original README.md (context):"
     printf '%s\n' '```markdown'
@@ -229,6 +366,12 @@ build_message_file() {
       cat README.md
     fi
     printf '\n%s\n' '```'
+    if [[ -f .git/description ]]; then
+      printf '\n%s\n' "Current .git/description (context):"
+      printf '%s\n' '```text'
+      cat .git/description || true
+      printf '\n%s\n' '```'
+    fi
   } > "$msg_file"
 }
 
@@ -242,18 +385,46 @@ run_aider() {
     cd "$dir"
 
     local readonly_args=()
-    for f in \
-      package.json pnpm-lock.yaml yarn.lock package-lock.json \
-      pyproject.toml poetry.lock requirements.txt setup.py setup.cfg \
-      Cargo.toml Cargo.lock go.mod go.sum \
-      pom.xml build.gradle settings.gradle gradle.properties \
-      Gemfile Gemfile.lock composer.json composer.lock \
-      Makefile Dockerfile docker-compose.yml docker-compose.yaml compose.yml \
-      CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md CHANGELOG.md \
-      install.sh tick-emulator.py
-    do
-      [[ -f "$f" ]] && readonly_args+=(--read "$f")
+    declare -A read_seen=()
+    add_read() {
+      local f="$1"
+      [[ -n "$f" ]] || return 0
+      f="${f#./}"
+      [[ -n "$f" ]] || return 0
+      [[ -f "$f" ]] || return 0
+      if [[ -z "${read_seen["$f"]+x}" ]]; then
+        read_seen["$f"]=1
+        readonly_args+=(--read "$f")
+      fi
+    }
+
+    # Add high-signal + representative + random context files (can be in subdirectories).
+    local -a ctx_files=()
+    mapfile -t ctx_files < <(collect_context_files 8 || true)
+    local cf
+    for cf in "${ctx_files[@]}"; do
+      add_read "$cf"
     done
+
+    # Ensure at least one context file is provided.
+    if [[ "${#readonly_args[@]}" -eq 0 ]]; then
+      if [[ -f README.md ]]; then
+        add_read "README.md"
+      else
+        cf="$(find_pruned -type f -print 2>/dev/null | head -n 1 || true)"
+        [[ -n "$cf" ]] && add_read "$cf"
+      fi
+    fi
+
+    # Decide edit targets based on what's present (avoid forcing .git/description in non-git folders/monorepo subdirs).
+    local -a edit_targets=(README.md)
+    [[ -f .git/description ]] && edit_targets+=(".git/description")
+
+    # Only use --subtree-only when inside a git worktree; helps in monorepos but shouldn't break non-git folders.
+    local subtree_args=()
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      subtree_args+=(--subtree-only)
+    fi
 
     timeout "$TIMEOUT" aider \
       --model "$MODEL" \
@@ -269,10 +440,10 @@ run_aider() {
       --input-history-file /dev/null \
       --llm-history-file /dev/null \
       --no-restore-chat-history \
-      --subtree-only \
+      "${subtree_args[@]}" \
       --message-file "$msg_file" \
       "${readonly_args[@]}" \
-      README.md .git/description
+      "${edit_targets[@]}"
   ) >"$log_file" 2>&1
 }
 
@@ -450,10 +621,9 @@ process_one_repo() {
 
   echo "START  $base"
 
-  if [[ ! -d "$dir/.git" ]]; then
-    printf "%s\t%s\t%s\t%s\t%s\n" "$base" "skip_nonrepo" "-" "commit_skipped" "-" > "$result_file"
-    echo "DONE   $base (skip_nonrepo)"
-    return 0
+  local has_local_git=0
+  if [[ -d "$dir/.git" ]]; then
+    has_local_git=1
   fi
 
   local utc_iso start end dur
@@ -478,15 +648,23 @@ process_one_repo() {
         echo "DEBUG: README.md already exists" >&2
       fi
       
-      if [[ ! -f .git/description ]]; then
-        echo "DEBUG: Created empty .git/description" >&2
-        : > .git/description
+      if [[ $has_local_git -eq 1 ]]; then
+        if [[ ! -f .git/description ]]; then
+          echo "DEBUG: Created empty .git/description" >&2
+          : > .git/description
+        else
+          echo "DEBUG: .git/description already exists" >&2
+        fi
       else
-        echo "DEBUG: .git/description already exists" >&2
+        echo "DEBUG: No local .git; skipping .git/description setup" >&2
       fi
       
       echo "DEBUG: Setup complete, checking git status" >&2
-      git status --porcelain >&2 || echo "DEBUG: git status failed" >&2
+      if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git status --porcelain >&2 || echo "DEBUG: git status failed" >&2
+      else
+        echo "DEBUG: Not a git worktree; skipping git status" >&2
+      fi
     )
   fi
 
@@ -578,6 +756,12 @@ process_one_repo() {
   if [[ $DRY_RUN -eq 1 ]]; then
     commit_status="dry_run"
   else
+    if [[ $has_local_git -ne 1 ]]; then
+      commit_status="commit_skipped"
+      printf "%s\t%s\t%s\t%s\t%s\n" "$base" "$aider_status" "$aider_rc" "$commit_status" "$dur" > "$result_file"
+      echo "DONE   $base (aider=$aider_status rc=$aider_rc, commit=$commit_status, dur=${dur}s)"
+      return 0
+    fi
     (
       cd "$dir"
       git add -A
